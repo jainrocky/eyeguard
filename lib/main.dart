@@ -173,16 +173,81 @@ class _FaceDetectionPageState
       ),
     );
 
+    _createCameraController();
+
+    _restoreSessionState();
+  }
+
+  // ====================================================
+  // SESSION RESTORE
+  //
+  // If the native monitoring service survived an
+  // app restart, resume straight into monitoring
+  // mode and leave the camera to the service.
+  // ====================================================
+
+  Future<void> _restoreSessionState()
+      async {
+
+    var monitoring = false;
+
+    try {
+
+      final result =
+          await _monitoringChannel
+              .invokeMethod<bool>(
+        'isMonitoringActive',
+      );
+
+      monitoring =
+          result ?? false;
+
+    } catch (e) {
+
+      debugPrint(
+        'Failed to check monitoring '
+        'state: $e',
+      );
+    }
+
+    if (!mounted) {
+
+      return;
+    }
+
+    if (monitoring) {
+
+      setState(() {
+
+        _nativeMonitoring =
+            true;
+
+        // The service cannot run without
+        // a saved calibration.
+
+        _calibrationComplete =
+            true;
+
+        _checkingCalibration =
+            false;
+
+        _status =
+            'Eye Guard is monitoring';
+      });
+
+      return;
+    }
+
     _initializeCamera();
 
     _loadCalibrationStatus();
   }
 
   // ====================================================
-  // CAMERA INITIALIZATION
+  // CAMERA CONTROLLER CREATION
   // ====================================================
 
-  Future<void> _initializeCamera() async {
+  void _createCameraController() {
 
     _cameraController =
         CameraController(
@@ -202,6 +267,11 @@ class _FaceDetectionPageState
 
     _cameraDisposed =
         false;
+  }
+
+  Future<void> _initializeCamera() async {
+
+    _createCameraController();
 
     try {
 
@@ -1048,6 +1118,27 @@ class _FaceDetectionPageState
           _nativeMonitoring =
               true;
 
+          // ------------------------------------------
+          // Clear any pending prototype warning.
+          //
+          // A countdown started at close range must
+          // not fire after the native service takes
+          // over: no frames arrive during native
+          // monitoring, so this overlay could never
+          // clear itself.
+          // ------------------------------------------
+
+          _tooCloseTimer?.cancel();
+
+          _tooCloseTimer =
+              null;
+
+          _showWarning =
+              false;
+
+          _latestDistance =
+              null;
+
           _status =
               'Eye Guard is monitoring';
         });
@@ -1449,6 +1540,7 @@ class _FaceDetectionPageState
             _latestDistance;
 
         if (
+            !_nativeMonitoring &&
             currentDistance != null &&
             currentDistance <
                 warningDistanceCm) {
@@ -1955,9 +2047,16 @@ class _FaceDetectionPageState
 
         // =================================================
         // FLUTTER PROTOTYPE WARNING
+        //
+        // Never shown during native monitoring: the
+        // native service owns alerting there and no
+        // camera frames arrive to clear this overlay.
         // =================================================
 
-        if (_showWarning)
+        if (
+            _showWarning &&
+            !_nativeMonitoring)
+
           Positioned.fill(
             child:
                 _buildWarningOverlay(),

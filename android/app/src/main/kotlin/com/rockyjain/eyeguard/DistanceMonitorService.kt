@@ -50,6 +50,16 @@ class DistanceMonitorService : Service() {
 
         private const val CAMERA_RETRY_DELAY_MS =
             3_000L
+
+        // --------------------------------------------------
+        // True while this service is alive. Read by
+        // MainActivity so a restarted app can tell
+        // that background monitoring is still on.
+        // --------------------------------------------------
+
+        @Volatile
+        var isServiceRunning = false
+            private set
     }
 
     // --------------------------------------------------
@@ -123,6 +133,9 @@ override fun onCreate() {
         TAG,
         "Service onCreate()"
     )
+
+    isServiceRunning =
+        true
 
     createNotificationChannel()
 
@@ -709,6 +722,41 @@ override fun onStartCommand(
 
                 captureSession = null
 
+                // Release the frame pipeline too so
+                // the retry can rebuild it cleanly.
+
+                try {
+
+                    imageReader?.close()
+
+                } catch (e: Exception) {
+
+                    Log.w(
+                        TAG,
+                        "Unable to close ImageReader",
+                        e
+                    )
+                }
+
+                imageReader =
+                    null
+
+                try {
+
+                    cameraAnalyzer?.close()
+
+                } catch (e: Exception) {
+
+                    Log.w(
+                        TAG,
+                        "Unable to close CameraAnalyzer",
+                        e
+                    )
+                }
+
+                cameraAnalyzer =
+                    null
+
                 isCameraStarting =
                     false
 
@@ -741,6 +789,38 @@ override fun onStartCommand(
                 }
 
                 captureSession = null
+
+                try {
+
+                    imageReader?.close()
+
+                } catch (e: Exception) {
+
+                    Log.w(
+                        TAG,
+                        "Unable to close ImageReader",
+                        e
+                    )
+                }
+
+                imageReader =
+                    null
+
+                try {
+
+                    cameraAnalyzer?.close()
+
+                } catch (e: Exception) {
+
+                    Log.w(
+                        TAG,
+                        "Unable to close CameraAnalyzer",
+                        e
+                    )
+                }
+
+                cameraAnalyzer =
+                    null
 
                 isCameraStarting =
                     false
@@ -1089,6 +1169,9 @@ override fun onDestroy() {
 
     isShuttingDown =
         true
+
+    isServiceRunning =
+        false
 
     Log.d(
         TAG,

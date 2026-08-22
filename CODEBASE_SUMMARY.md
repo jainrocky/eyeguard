@@ -71,10 +71,11 @@ distance_cm = 40.0 × (reference_face_width_px / current_face_width_px)
 
 Implemented twice (Flutter prototype in `main.dart`, native in `DistanceWarningController.kt`):
 
-1. Distance drops **below 35 cm** → start a **2-second confirmation timer** (`WARNING_DELAY_MS = 2000`).
-2. If distance returns ≥ 35 cm before 2 s elapse → timer cancelled (no false alarms from momentary leans).
-3. After 2 s confirmed → **warning shown**; it stays visible until distance reaches **≥ 40 cm** (hysteresis prevents flicker between 35–40 cm).
-4. **Face-lost grace**: a single missed ML Kit frame does **not** reset the timer — up to **500 ms** without a face is tolerated (motion / lighting / blur). After 500 ms the face is considered genuinely lost and the timer resets.
+1. Distance drops **below 35 cm** → start a **1-second confirmation timer** (`WARNING_DELAY_MS = 1000`).
+2. If distance returns ≥ 35 cm before 1 s elapses → timer cancelled (no false alarms from momentary leans).
+3. After 1 s confirmed → **warning shown**; it stays visible until distance reaches **≥ 40 cm** (hysteresis prevents flicker between 35–40 cm).
+4. **Face lost while too close**: if the face disappears while the last reading was < 35 cm, the countdown is *preserved* and the warning still fires after 1 s — very close faces often leave the ML Kit detection frame entirely, so losing tracking must not defeat the alert.
+5. **Face-lost grace at safe distance**: a missed ML Kit frame does **not** reset the timer for up to **500 ms** (motion / lighting / blur). After 500 ms the face is considered genuinely lost and the timer resets.
 
 ## 6. Flutter Layer (`lib/main.dart`)
 
@@ -89,8 +90,9 @@ Key components:
   - **Recalibration**: once calibrated, a compact `RECALIBRATE` button (refresh icon) appears under the "Calibration complete • 40 cm" row in the status card. It re-runs `_calibrate()` after a confirmation dialog (`_confirmRecalibrate()`) warning that the saved reference will be replaced; the success snackbar then reads "Recalibrated at …". Recalibration is blocked while native monitoring is active (the Flutter camera is released and owned by the foreground service) — both via a disabled button state and an early-return guard with a snackbar.
   - **In-app warning**: `_updateWarningState()` mirrors the native state machine with a `Timer`; `_buildWarningOverlay()` renders a full-screen red warning with live distance.
   - **HUD**: status text, estimated distance, face count, face width/height, calibration state.
-  - **Native handoff** (`_startNativeMonitoring()`): requires calibration → requests **overlay permission** (`requestOverlayPermission`) → stops & disposes the Flutter camera → requests notification permission → invokes `startMonitoring` → shows a "monitoring" screen with a **STOP MONITORING** button (`_isStoppingMonitoring` disables it / shows a spinner while stopping).
-  - **Stop monitoring** (`_stopNativeMonitoring()`): double-tap guarded → invokes `stopMonitoring` (service releases its camera + overlay in `onDestroy()`) → resets prototype state (warning timer/overlay, smoothed distance, HUD values) → flips back to preview mode → calls `_initializeCamera()` to re-acquire the Flutter camera and restart the frame stream → restores status from stored calibration. `build()`'s loading branch checks `_cameraDisposed` as well as `isInitialized` — but only while `_nativeMonitoring` is false, since the Flutter camera is intentionally released during native monitoring. `_startNativeMonitoring()` also flips the UI flag *before* releasing the camera so no frame renders a dead preview.
+  - **Session restore**: on startup `_restoreSessionState()` asks the native side (`isMonitoringActive`) whether the foreground service survived an app restart/process death. If yes, the app resumes directly in monitoring mode (STOP button available) and **never touches the camera** — otherwise the Flutter camera initializes normally. This prevents the reopened app from fighting the service over the front camera (which froze the preview and starved the service).
+  - **Native handoff** (`_startNativeMonitoring()`): requires calibration → requests **overlay permission** (`requestOverlayPermission`) → flips `_nativeMonitoring` first, clears any **pending prototype warning/timer** (`_tooCloseTimer`, `_showWarning`, `_latestDistance`) so a stale Flutter overlay can never cover the monitoring view, then stops & disposes the Flutter camera → requests notification permission → invokes `startMonitoring` → shows a "monitoring" screen with a **STOP MONITORING** button (`_isStoppingMonitoring` disables it / shows a spinner while stopping). Defense in depth: both `build()`'s overlay condition and the countdown-timer callback also ignore warning state while `_nativeMonitoring` is true.
+  - **Stop monitoring** (`_stopNativeMonitoring()`): double-tap guarded → invokes `stopMonitoring` (service releases its camera + overlay in `onDestroy()`) → resets prototype state (warning timer/overlay, smoothed distance, HUD values) → flips back to preview mode → calls `_initializeCamera()` to re-acquire the Flutter camera and restart the frame stream → restores status from stored calibration. `build()`'s loading branch checks `_cameraDisposed` as well as `isInitialized` — but only while `_nativeMonitoring` is false, since the Flutter camera is intentionally released during native monitoring. `_startNativeMonitoring()` also flips the UI flag *before* releasing the camera so no frame renders a dead preview. During native monitoring the prototype status card is hidden (its values would be frozen and it would cover the STOP MONITORING button).
   - **MethodChannel**: `com.rockyjain.eyeguard/monitoring` with methods `setCalibration`, `getCalibrationStatus`, `requestOverlayPermission`, `requestNotificationPermission`, `startMonitoring`, `stopMonitoring`.
 
 ## 7. Native Android Layer (Kotlin)
@@ -100,12 +102,14 @@ Key components:
 - `setCalibration` → validates `faceWidth > 0`, persists to `SharedPreferences("eye_guard_preferences")`.
 - `getCalibrationStatus` → returns the persisted boolean.
 - `getCalibrationWidth` → returns the persisted reference face width as double (null when unset), used to restore distance estimation after app restart.
+- `isMonitoringActive` → returns whether `DistanceMonitorService` is currently alive (static `isServiceRunning` flag, same process), used by the app's session-restore logic.
 - `requestOverlayPermission` → checks `Settings.canDrawOverlays`, opens `ACTION_MANAGE_OVERLAY_PERMISSION` for the package if missing.
 - `requestNotificationPermission` → `POST_NOTIFICATIONS` runtime request on Android 13+.
 - `startMonitoring` / `stopMonitoring` → start (foreground on O+) / stop `DistanceMonitorService`.
 
 ### `DistanceMonitorService.kt` (the production monitor)
-- Foreground **`Service`** (`foregroundServiceType="camera"`, `START_STICKY`) with a low-importance ongoing notification ("Eye Guard is monitoring", `FOREGROUND_SERVICE_IMMEDIATE` on Android S+).
+- Foreground **`Service`** (`foregroundServiceType="camera"`, `START_STICKY`) with a low-importance ongoing notification ("Eye Guard is monitoring", `FOREGROUND_SERVICE_IMMEDIATE` on Android S+). Tapping the notification opens `MainActivity` via an immutable `PendingIntent`.
+- **Camera eviction auto-resume**: when another app takes the camera (`onDisconnected`, `onError`, `CAMERA_IN_USE` while opening, or session configuration failure), the pipeline is torn down cleanly (device/session/`ImageReader`/analyzer) and `scheduleCameraRetry()` retries every **3 s** until the camera is free — monitoring resumes automatically. An `isShuttingDown` flag prevents retries after `onDestroy()`.
 - **Camera2 pipeline**: finds front camera → `ImageReader` at **640×480 YUV_420_888** (max 3 images, `acquireLatestImage()` to drop stale frames) → dedicated `HandlerThread("EyeGuardCameraThread")` → capture session with `TEMPLATE_PREVIEW` + continuous autofocus + repeating request.
 - **Frame flow**: `ImageReader` → `CameraAnalyzer.analyze()` → face width → `DistanceEngine.calculateDistance()` → `DistanceWarningController.update()` → `syncOverlay()`. `syncOverlay()` runs on **both** face and no-face frames, shows/hides the overlay from the warning state, and falls back to the controller's last known distance while the face is undetectable.
 - Loads saved calibration from SharedPreferences in `onCreate`; full, defensive teardown in `stopCamera()` / `onDestroy()` (session, device, reader, analyzer, thread).
@@ -158,5 +162,12 @@ flutter test                # NOTE: widget_test.dart is stale and will fail
 ```
 
 Calibration flow on device: launch → allow camera → hold phone ~40 cm away → *CALIBRATE AT 40 CM* → *START MONITORING* → grant "Display over other apps" + notifications → app hands off to the native foreground service. Tapping *STOP MONITORING* stops the service, returns to the live preview, and re-enables recalibration.
+
+## 11. Release & Distribution (GitHub, no store)
+
+- **Signing**: `android/app/upload-keystore.jks` (alias `eyeguard-upload`) + `android/key.properties`. Both are **git-ignored — back them up privately**; losing the keystore means existing users can never install updates.
+- **Build**: `flutter build apk --release` → `build/app/outputs/flutter-apk/app-release.apk`.
+- **Versioning**: bump `version:` in `pubspec.yaml` (e.g. `1.0.1+2`) before each release build.
+- **Automated builds**: `.github/workflows/build-release.yml` builds a signed APK on every `v*` tag push and attaches it to the matching GitHub Release. Requires repo secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_PASSWORD`, `KEY_ALIAS`.
 
 

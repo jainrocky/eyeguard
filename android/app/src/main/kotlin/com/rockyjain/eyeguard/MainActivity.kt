@@ -165,6 +165,15 @@ class MainActivity : FlutterActivity() {
 }
 
 
+"isMonitoringActive" -> {
+
+    result.success(
+        DistanceMonitorService
+            .isServiceRunning
+    )
+}
+
+
                 else -> {
                     result.notImplemented()
                 }
