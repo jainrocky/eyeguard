@@ -87,6 +87,7 @@ Key components:
   - **Camera**: `CameraController` (front, `ResolutionPreset.medium`, audio off, NV21 on Android / BGRA8888 otherwise) with a `startImageStream` frame pipeline.
   - **Frame → ML Kit**: converts `CameraImage` to `InputImage.fromBytes` (NV21 single-plane validated on Android); skips frames while a detection is in flight (`_isDetecting` guard).
   - **Calibration**: `_calibrate()` saves face width via MethodChannel `setCalibration`, seeds smoothing at 40 cm. On startup `_loadCalibrationStatus()` restores both the flag and the saved reference face width (`getCalibrationStatus` + `getCalibrationWidth`), so distance estimation works immediately after reopening; if the stored width is missing/zero the app falls back to "Please calibrate".
+  - **Reset calibration**: the status card shows **RECALIBRATE | RESET** when calibrated. RESET (`_resetCalibration()`, red, confirmation dialog) invokes native `resetCalibration` to delete both SharedPreferences keys, then clears all local state (flag, reference width, smoothing, pending warning/timer) — returning the app to "Please calibrate at 40 cm". Blocked during native monitoring.
   - **Recalibration**: once calibrated, a compact `RECALIBRATE` button (refresh icon) appears under the "Calibration complete • 40 cm" row in the status card. It re-runs `_calibrate()` after a confirmation dialog (`_confirmRecalibrate()`) warning that the saved reference will be replaced; the success snackbar then reads "Recalibrated at …". Recalibration is blocked while native monitoring is active (the Flutter camera is released and owned by the foreground service) — both via a disabled button state and an early-return guard with a snackbar.
   - **In-app warning**: `_updateWarningState()` mirrors the native state machine with a `Timer`; `_buildWarningOverlay()` renders a full-screen red warning with live distance.
   - **HUD**: status text, estimated distance, face count, face width/height, calibration state.
@@ -102,6 +103,7 @@ Key components:
 - `setCalibration` → validates `faceWidth > 0`, persists to `SharedPreferences("eye_guard_preferences")`.
 - `getCalibrationStatus` → returns the persisted boolean.
 - `getCalibrationWidth` → returns the persisted reference face width as double (null when unset), used to restore distance estimation after app restart.
+- `resetCalibration` → deletes `reference_face_width` + `calibration_complete` from SharedPreferences (full calibration wipe).
 - `isMonitoringActive` → returns whether `DistanceMonitorService` is currently alive (static `isServiceRunning` flag, same process), used by the app's session-restore logic.
 - `requestOverlayPermission` → checks `Settings.canDrawOverlays`, opens `ACTION_MANAGE_OVERLAY_PERMISSION` for the package if missing.
 - `requestNotificationPermission` → `POST_NOTIFICATIONS` runtime request on Android 13+.

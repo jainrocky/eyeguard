@@ -857,6 +857,182 @@ class _FaceDetectionPageState
         false;
   }
 
+  // ----------------------------------------------------
+  // Reset calibration confirmation
+  // ----------------------------------------------------
+
+  Future<bool> _confirmResetCalibration()
+      async {
+
+    final result =
+        await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) =>
+          AlertDialog(
+
+        title: const Text(
+          'Reset calibration?',
+        ),
+
+        content: const Text(
+          'Your saved 40 cm reference '
+          'will be permanently '
+          'deleted. You will need to '
+          'calibrate again before '
+          'monitoring.',
+        ),
+
+        actions: [
+
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext)
+                    .pop(false),
+            child: const Text(
+              'CANCEL',
+            ),
+          ),
+
+          TextButton(
+            onPressed: () =>
+                Navigator.of(dialogContext)
+                    .pop(true),
+            child: const Text(
+              'DELETE',
+              style: TextStyle(
+                color: Colors.red,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    return result ??
+        false;
+  }
+
+  // ----------------------------------------------------
+  // Reset calibration
+  //
+  // Deletes the saved reference from native
+  // storage and returns the app to the
+  // uncalibrated state.
+  // ----------------------------------------------------
+
+  Future<void> _resetCalibration()
+      async {
+
+    // --------------------------------------------------
+    // Not available during native monitoring
+    // --------------------------------------------------
+
+    if (_nativeMonitoring) {
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Stop monitoring before '
+            'resetting calibration.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    final confirmed =
+        await _confirmResetCalibration();
+
+    if (!confirmed) {
+
+      return;
+    }
+
+    if (!mounted) {
+
+      return;
+    }
+
+    try {
+
+      await _monitoringChannel
+          .invokeMethod(
+        'resetCalibration',
+      );
+
+    } catch (e) {
+
+      debugPrint(
+        'Failed to reset calibration: $e',
+      );
+
+      if (!mounted) {
+
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Failed to reset calibration: $e',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    if (!mounted) {
+
+      return;
+    }
+
+    setState(() {
+
+      _calibrationComplete =
+          false;
+
+      _referenceFaceWidth =
+          null;
+
+      _smoothedDistance =
+          null;
+
+      _estimatedDistance =
+          null;
+
+      _latestDistance =
+          null;
+
+      _tooCloseTimer?.cancel();
+
+      _tooCloseTimer =
+          null;
+
+      _showWarning =
+          false;
+
+      _status =
+          'Please calibrate at 40 cm';
+    });
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Calibration deleted. '
+          'Please calibrate again.',
+        ),
+      ),
+    );
+  }
+
   Future<void> _calibrate() async {
 
     // --------------------------------------------------
@@ -1908,19 +2084,52 @@ class _FaceDetectionPageState
                                 height: 4,
                               ),
 
-                              TextButton.icon(
-                                onPressed:
-                                    (_checkingCalibration ||
-                                            _nativeMonitoring)
-                                        ? null
-                                        : _calibrate,
-                                icon: const Icon(
-                                  Icons.refresh,
-                                  size: 18,
-                                ),
-                                label: const Text(
-                                  'RECALIBRATE',
-                                ),
+                              Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.center,
+                                children: [
+
+                                  TextButton.icon(
+                                    onPressed:
+                                        (_checkingCalibration ||
+                                                _nativeMonitoring)
+                                            ? null
+                                            : _calibrate,
+                                    icon: const Icon(
+                                      Icons.refresh,
+                                      size: 18,
+                                    ),
+                                    label: const Text(
+                                      'RECALIBRATE',
+                                    ),
+                                  ),
+
+                                  const SizedBox(
+                                    width: 8,
+                                  ),
+
+                                  TextButton.icon(
+                                    onPressed:
+                                        (_checkingCalibration ||
+                                                _nativeMonitoring)
+                                            ? null
+                                            : _resetCalibration,
+                                    icon: const Icon(
+                                      Icons.delete_outline,
+                                      size: 18,
+                                      color:
+                                          Colors.red,
+                                    ),
+                                    label: const Text(
+                                      'RESET',
+                                      style:
+                                          TextStyle(
+                                        color:
+                                            Colors.red,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           )

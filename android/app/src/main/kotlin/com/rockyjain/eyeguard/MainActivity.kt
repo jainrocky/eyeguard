@@ -165,6 +165,26 @@ class MainActivity : FlutterActivity() {
 }
 
 
+"resetCalibration" -> {
+
+    getSharedPreferences(
+        "eye_guard_preferences",
+        MODE_PRIVATE
+    )
+        .edit()
+        .remove("reference_face_width")
+        .remove("calibration_complete")
+        .apply()
+
+    android.util.Log.d(
+        "EyeGuardActivity",
+        "Stored calibration deleted"
+    )
+
+    result.success(true)
+}
+
+
 "isMonitoringActive" -> {
 
     result.success(
